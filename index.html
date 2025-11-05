@@ -1,0 +1,842 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>9x9 Chess Game</title>
+    <style>
+        /* Basic page styling */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: #333;
+            color: #eee;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+            box-sizing: border-box;
+            min-height: 100vh;
+        }
+
+        /* Main container for board and sidebar */
+        .game-container {
+            display: flex;
+            flex-wrap: wrap; /* Allows sidebar to stack on small screens */
+            justify-content: center;
+            gap: 20px;
+        }
+
+        /* The game board canvas */
+        #chessCanvas {
+            background-color: #f0d9b5;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+            max-width: 100%;
+            height: auto;
+        }
+
+        /* Sidebar for controls and info */
+        .sidebar {
+            width: 220px;
+            min-width: 220px;
+            background-color: #f5dea9;
+            color: #333;
+            border-radius: 8px;
+            padding: 20px;
+            box-sizing: border-box;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        /* Timer labels */
+        .timer {
+            font-size: 1.1em;
+            font-weight: 600;
+            padding: 10px;
+            border-radius: 6px;
+            text-align: center;
+            background-color: #c27421;
+            color: #f5dea9;
+        }
+
+        /* Control buttons */
+        .sidebar button {
+            font-size: 1em;
+            font-weight: 500;
+            padding: 12px;
+            border: none;
+            border-radius: 6px;
+            background-color: #c27421;
+            color: #f5dea9;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+        .sidebar button:hover {
+            background-color: #a8641b;
+        }
+
+        /* Piece info box */
+        .info-box {
+            background-color: #fff;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            padding: 12px;
+            height: 150px;
+            overflow-y: auto;
+            font-size: 0.9em;
+            line-height: 1.5;
+        }
+        .info-box h3 {
+            margin-top: 0;
+            padding-bottom: 5px;
+            border-bottom: 2px solid #eee;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="game-container">
+        <!-- The board will be drawn here by JavaScript -->
+        <canvas id="chessCanvas"></canvas>
+
+        <!-- Sidebar with controls and info -->
+        <div class="sidebar">
+            <div id="player-time" class="timer">Player Time: 10:00</div>
+            <div id="opponent-time" class="timer">Opponent Time: 10:00</div>
+            
+            <button id="new-game-btn">New Game</button>
+            <button id="undo-btn">Undo</button>
+            <button id="redo-btn">Redo</button>
+            
+            <div class="info-box">
+                <h3 id="info-piece-name">Piece Info</h3>
+                <p id="info-piece-desc">Click on a piece to see its move description.</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- 1. GAME CONSTANTS AND STATE ---
+        const BOARD_WIDTH = 576;
+        const BOARD_HEIGHT = 576;
+        const DIMENSION = 9;
+        const SQUARE_SIZE = BOARD_WIDTH / DIMENSION;
+        const IMAGES = {};
+        
+        // Piece Info Descriptions (Ported from chessui.py)
+        const PIECE_INFO = {
+            "P": { name: "President", desc: "Moves one step in any direction." },
+            "G": { name: "General", desc: "Moves across the board (N, NE, NW, E) and one step (S)." },
+            "V": { name: "Vice-General", desc: "Moves across the board (S, SE, SW, E, W) and one step (N)." },
+            "A": { name: "Air Marshal", desc: "Moves across the board (NE, NW, SE, SW, N)." },
+            "N": { name: "Navy Seal", desc: "Jumps two steps diagonally." },
+            "S": { name: "Soldier", desc: "Moves like a standard Pawn. One step forward, two on first move. Captures diagonally forward." },
+            "B": { name: "Army Battalion", desc: "Moves across the board (N, S, E, W), like a Rook." },
+            "default": { name: "Piece Info", desc: "Click on a piece to see its move description." }
+        };
+        
+        // --- 2. GAME ENGINE (Ported from chessengine.py) ---
+
+        /**
+         * Represents a single move
+         */
+        class Move {
+            constructor(startSq, endSq, board) {
+                this.startRow = startSq[0];
+                this.startCol = startSq[1];
+                this.endRow = endSq[0];
+                this.endCol = endSq[1];
+                this.pieceMoved = board[this.startRow][this.startCol];
+                this.pieceCaptured = board[this.endRow][this.endCol];
+                this.moveID = this.startRow * 1000 + this.startCol * 100 + this.endRow * 10 + this.endCol;
+            }
+
+            equals(other) {
+                if (other instanceof Move) {
+                    return this.moveID === other.moveID;
+                }
+                return false;
+            }
+        }
+
+        /**
+         * Represents the entire game state and logic
+         */
+        class GameState {
+            constructor() {
+                this.board = [
+                    ["bA", "bN", "bV", "bB", "bP", "bG", "bV", "bN", "bA"],
+                    ["bS", "bS", "bS", "bS", "bS", "bS", "bS", "bS", "bS"],
+                    ["--", "--", "--", "--", "--", "--", "--", "--", "--"],
+                    ["--", "--", "--", "--", "--", "--", "--", "--", "--"],
+                    ["--", "--", "--", "--", "--", "--", "--", "--", "--"],
+                    ["--", "--", "--", "--", "--", "--", "--", "--", "--"],
+                    ["--", "--", "--", "--", "--", "--", "--", "--", "--"],
+                    ["wS", "wS", "wS", "wS", "wS", "wS", "wS", "wS", "wS"],
+                    ["wA", "wN", "wV", "wB", "wP", "wG", "wV", "wN", "wA"]
+                ];
+                
+                // JS equivalent of the moveFunctions dictionary
+                this.moveFunctions = {
+                    "P": this.getPresidentMoves,
+                    "G": this.getGeneralMoves,
+                    "V": this.getViceGeneralMoves,
+                    "A": this.getAirMarshalMoves,
+                    "N": this.getNavySealMoves,
+                    "S": this.getSoldierMoves,
+                    "B": this.getArmyBattalionMoves
+                };
+                
+                this.whiteToMove = true;
+                this.moveLog = [];
+                this.whitePresidentLocation = [8, 4];
+                this.blackPresidentLocation = [0, 4];
+                this.checkmate = false;
+            }
+
+            makeMove(move) {
+                this.board[move.startRow][move.startCol] = "--";
+                this.board[move.endRow][move.endCol] = move.pieceMoved;
+                this.moveLog.push(move);
+                this.whiteToMove = !this.whiteToMove;
+
+                if (move.pieceMoved === "wP") {
+                    this.whitePresidentLocation = [move.endRow, move.endCol];
+                } else if (move.pieceMoved === "bP") {
+                    this.blackPresidentLocation = [move.endRow, move.endCol];
+                }
+            }
+
+            undoMove() {
+                if (this.moveLog.length === 0) return;
+                
+                const move = this.moveLog.pop();
+                this.board[move.startRow][move.startCol] = move.pieceMoved;
+                this.board[move.endRow][move.endCol] = move.pieceCaptured;
+                this.whiteToMove = !this.whiteToMove;
+
+                if (move.pieceMoved === "wP") {
+                    this.whitePresidentLocation = [move.startRow, move.startCol];
+                } else if (move.pieceMoved === "bP") {
+                    this.blackPresidentLocation = [move.startRow, move.startCol];
+                }
+                this.checkmate = false;
+            }
+
+            inCheck() {
+                if (this.whiteToMove) {
+                    return this.squareUnderAttack(this.whitePresidentLocation[0], this.whitePresidentLocation[1]);
+                } else {
+                    return this.squareUnderAttack(this.blackPresidentLocation[0], this.blackPresidentLocation[1]);
+                }
+            }
+
+            squareUnderAttack(row, col) {
+                const opponentMoves = this._getAllPossibleMovesUnchecked(!this.whiteToMove);
+                for (const move of opponentMoves) {
+                    if (move.endRow === row && move.endCol === col) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            getValidMoves() {
+                const moves = this._getAllPossibleMovesUnchecked(this.whiteToMove);
+                
+                for (let i = moves.length - 1; i >= 0; i--) {
+                    const move = moves[i];
+                    
+                    // Simulate the move
+                    this.board[move.startRow][move.startCol] = "--";
+                    this.board[move.endRow][move.endCol] = move.pieceMoved;
+                    
+                    let oldPresidentLoc = null;
+                    if (move.pieceMoved === "wP") {
+                        oldPresidentLoc = this.whitePresidentLocation;
+                        this.whitePresidentLocation = [move.endRow, move.endCol];
+                    } else if (move.pieceMoved === "bP") {
+                        oldPresidentLoc = this.blackPresidentLocation;
+                        this.blackPresidentLocation = [move.endRow, move.endCol];
+                    }
+
+                    if (this.inCheck()) {
+                        moves.splice(i, 1); // Remove invalid move
+                    }
+                    
+                    // Undo simulated move
+                    this.board[move.startRow][move.startCol] = move.pieceMoved;
+                    this.board[move.endRow][move.endCol] = move.pieceCaptured;
+                    
+                    if (move.pieceMoved === "wP") {
+                        this.whitePresidentLocation = oldPresidentLoc;
+                    } else if (move.pieceMoved === "bP") {
+                        this.blackPresidentLocation = oldPresidentLoc;
+                    }
+                }
+
+                // After filtering, check for checkmate
+                if (moves.length === 0 && this.inCheck()) {
+                    this.checkmate = true;
+                } else {
+                    this.checkmate = false;
+                }
+                
+                return moves;
+            }
+
+            _getAllPossibleMovesUnchecked(isWhiteTurn) {
+                const moves = [];
+                for (let r = 0; r < DIMENSION; r++) {
+                    for (let c = 0; c < DIMENSION; c++) {
+                        const piece = this.board[r][c];
+                        if (piece !== "--" && (piece[0] === 'w' ? isWhiteTurn : !isWhiteTurn)) {
+                            // Call the correct move function, binding 'this'
+                            this.moveFunctions[piece[1]].call(this, r, c, moves);
+                        }
+                    }
+                }
+                return moves;
+            }
+            
+            // --- Piece Move Functions (Ported) ---
+            
+            getPresidentMoves(row, col, moves) {
+                const directions = [[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]];
+                for (const d of directions) {
+                    const endRow = row + d[0];
+                    const endCol = col + d[1];
+                    if (0 <= endRow && endRow < DIMENSION && 0 <= endCol && endCol < DIMENSION) {
+                        const endPiece = this.board[endRow][endCol];
+                        if (endPiece === "--" || endPiece[0] !== this.board[row][col][0]) {
+                            moves.push(new Move([row, col], [endRow, endCol], this.board));
+                        }
+                    }
+                }
+            }
+
+            getGeneralMoves(row, col, moves) {
+                // --- FIX: Make directions relative to player ---
+                const fwd = this.whiteToMove ? -1 : 1;  // Forward
+                const back = this.whiteToMove ? 1 : -1; // Backward
+                
+                // N, NE, NW, E (relative to player)
+                const directions = [[fwd, 0], [fwd, 1], [fwd, -1], [0, 1]]; 
+                
+                for (const d of directions) {
+                    for (let i = 1; i < DIMENSION; i++) {
+                        const endRow = row + d[0] * i;
+                        const endCol = col + d[1] * i;
+                        if (0 <= endRow && endRow < DIMENSION && 0 <= endCol && endCol < DIMENSION) {
+                            const endPiece = this.board[endRow][endCol];
+                            if (endPiece === "--") {
+                                moves.push(new Move([row, col], [endRow, endCol], this.board));
+                            } else if (endPiece[0] !== this.board[row][col][0]) {
+                                moves.push(new Move([row, col], [endRow, endCol], this.board));
+                                break;
+                            } else {
+                                break;
+                            }
+                        // --- BUGFIX: Added 'else' to break on hitting board edge ---
+                        } else {
+                            break;
+                        }
+                    } // --- BUGFIX: Closed inner for loop ---
+                } // --- BUGFIX: Closed outer for loop ---
+
+                // One step S (relative to player)
+                const endRow = row + back;
+                const endCol = col;
+                if (0 <= endRow && endRow < DIMENSION && 0 <= endCol && endCol < DIMENSION) {
+                    const endPiece = this.board[endRow][endCol];
+                    if (endPiece === "--" || endPiece[0] !== this.board[row][col][0]) {
+                        moves.push(new Move([row, col], [endRow, endCol], this.board));
+                    }
+                }
+            }
+            
+            getViceGeneralMoves(row, col, moves) {
+                // --- FIX: Make directions relative to player ---
+                const fwd = this.whiteToMove ? -1 : 1;  // Forward
+                const back = this.whiteToMove ? 1 : -1; // Backward
+
+                // S, SE, SW, E, W (relative to player)
+                const directions = [[back, 0], [back, 1], [back, -1], [0, 1], [0, -1]];
+                
+                for (const d of directions) {
+                    for (let i = 1; i < DIMENSION; i++) {
+                        const endRow = row + d[0] * i;
+                        const endCol = col + d[1] * i;
+                        if (0 <= endRow && endRow < DIMENSION && 0 <= endCol && endCol < DIMENSION) {
+                            const endPiece = this.board[endRow][endCol];
+                            if (endPiece === "--") {
+                                moves.push(new Move([row, col], [endRow, endCol], this.board));
+                            } else if (endPiece[0] !== this.board[row][col][0]) {
+                                moves.push(new Move([row, col], [endRow, endCol], this.board));
+                                break;
+                            } else {
+                                break;
+                            }
+                        // --- BUGFIX: Added 'else' to break on hitting board edge ---
+                        } else {
+                            break;
+                        }
+                    } // --- BUGFIX: Closed inner for loop ---
+                } // --- BUGFIX: Closed outer for loop ---
+
+                // One step N (relative to player)
+                const endRow = row + fwd;
+                const endCol = col;
+                if (0 <= endRow && endRow < DIMENSION && 0 <= endCol && endCol < DIMENSION) {
+                    const endPiece = this.board[endRow][endCol];
+                    if (endPiece === "--" || endPiece[0] !== this.board[row][col][0]) {
+                        moves.push(new Move([row, col], [endRow, endCol], this.board));
+                    }
+                }
+            }
+
+            getAirMarshalMoves(row, col, moves) {
+                // --- FIX: Make directions relative to player ---
+                const fwd = this.whiteToMove ? -1 : 1;  // Forward
+                const back = this.whiteToMove ? 1 : -1; // Backward
+
+                // NE, NW, SE, SW, N (relative to player)
+                const directions = [[fwd, 1], [fwd, -1], [back, 1], [back, -1], [fwd, 0]]; 
+                
+                for (const d of directions) {
+                    for (let i = 1; i < DIMENSION; i++) {
+                        const endRow = row + d[0] * i;
+                        const endCol = col + d[1] * i;
+                        if (0 <= endRow && endRow < DIMENSION && 0 <= endCol && endCol < DIMENSION) {
+                            const endPiece = this.board[endRow][endCol];
+                            if (endPiece === "--") {
+                                moves.push(new Move([row, col], [endRow, endCol], this.board));
+                            } else if (endPiece[0] !== this.board[row][col][0]) {
+                                moves.push(new Move([row, col], [endRow, endCol], this.board));
+                                break;
+                            } else {
+                                break;
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            getNavySealMoves(row, col, moves) {
+                const directions = [[-2, 2], [2, 2], [2, -2], [-2, -2]];
+                for (const d of directions) {
+                    const endRow = row + d[0];
+                    const endCol = col + d[1];
+                    if (0 <= endRow && endRow < DIMENSION && 0 <= endCol && endCol < DIMENSION) {
+                        const endPiece = this.board[endRow][endCol];
+                        if (endPiece === "--" || endPiece[0] !== this.board[row][col][0]) {
+                            moves.push(new Move([row, col], [endRow, endCol], this.board));
+                        }
+                    }
+                }
+            }
+
+            getArmyBattalionMoves(row, col, moves) {
+                const directions = [[-1, 0], [1, 0], [0, 1], [0, -1]];
+                for (const d of directions) {
+                    for (let i = 1; i < DIMENSION; i++) {
+                        const endRow = row + d[0] * i;
+                        const endCol = col + d[1] * i;
+                        if (0 <= endRow && endRow < DIMENSION && 0 <= endCol && endCol < DIMENSION) {
+                            const endPiece = this.board[endRow][endCol];
+                            if (endPiece === "--") {
+                                moves.push(new Move([row, col], [endRow, endCol], this.board));
+                            } else if (endPiece[0] !== this.board[row][col][0]) {
+                                moves.push(new Move([row, col], [endRow, endCol], this.board));
+                                break;
+                            } else {
+                                break;
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            getSoldierMoves(row, col, moves) {
+                if (this.whiteToMove) {
+                    if (row - 1 >= 0 && this.board[row - 1][col] === "--") {
+                        moves.push(new Move([row, col], [row - 1, col], this.board));
+                        if (row === 7 && this.board[row - 2][col] === "--") {
+                            moves.push(new Move([row, col], [row - 2, col], this.board));
+                        }
+                    }
+                    if (row - 1 >= 0 && col - 1 >= 0 && this.board[row - 1][col - 1][0] === 'b') {
+                        moves.push(new Move([row, col], [row - 1, col - 1], this.board));
+                    }
+                    if (row - 1 >= 0 && col + 1 < DIMENSION && this.board[row - 1][col + 1][0] === 'b') {
+                        moves.push(new Move([row, col], [row - 1, col + 1], this.board));
+                    }
+                } else { // Black to move
+                    if (row + 1 < DIMENSION && this.board[row + 1][col] === "--") {
+                        moves.push(new Move([row, col], [row + 1, col], this.board));
+                        if (row === 1 && this.board[row + 2][col] === "--") {
+                            moves.push(new Move([row, col], [row + 2, col], this.board));
+                        }
+                    }
+                    if (row + 1 < DIMENSION && col - 1 >= 0 && this.board[row + 1][col - 1][0] === 'w') {
+                        moves.push(new Move([row, col], [row + 1, col - 1], this.board));
+                    }
+                    if (row + 1 < DIMENSION && col + 1 < DIMENSION && this.board[row + 1][col + 1][0] === 'w') {
+                        moves.push(new Move([row, col], [row + 1, col + 1], this.board));
+                    }
+                }
+            }
+        }
+
+        // --- 3. UI LOGIC (Ported from chessui.py) ---
+
+        // Global UI state variables
+        let canvas, ctx;
+        let gameState;
+        let validMoves = [];
+        let selectedSquare = {}; // e.g., { row: 7, col: 4 }
+        let moveLog = [];
+        let moveIndex = -1;
+        let playerTime = 600;
+        let opponentTime = 600;
+        let timerRunning = false;
+        let lastTimeUpdate = 0;
+        let timerInterval;
+        
+        // DOM Elements
+        let playerTimeLabel, opponentTimeLabel, infoPieceName, infoPieceDesc;
+
+        /**
+         * Loads all piece images
+         * Assumes an 'images' folder in the same directory as the HTML file
+         */
+        function loadImages() {
+            const pieces = ['wP', 'wG', 'wV', 'wA', 'wN', 'wS', 'wB',
+                            'bP', 'bG', 'bV', 'bA', 'bN', 'bS', 'bB'];
+            const promises = [];
+            
+            for (const piece of pieces) {
+                const img = new Image();
+                IMAGES[piece] = img;
+                // IMPORTANT: You MUST have an 'images' folder next to this HTML file
+                img.src = `images/${piece}.png`; 
+                
+                const promise = new Promise((resolve, reject) => {
+                    img.onload = resolve;
+                    img.onerror = () => reject(`Failed to load image: ${img.src}`);
+                });
+                promises.push(promise);
+            }
+            return Promise.all(promises);
+        }
+
+        /**
+         * Draws the 9x9 board
+         */
+        function drawBoard() {
+            const colors = ["#f0d9b5", "#b58863"];
+            for (let r = 0; r < DIMENSION; r++) {
+                for (let c = 0; c < DIMENSION; c++) {
+                    const color = colors[(r + c) % 2];
+                    ctx.fillStyle = color;
+                    ctx.fillRect(c * SQUARE_SIZE, r * SQUARE_SIZE, SQUARE_SIZE, SQUARE_SIZE);
+                }
+            }
+        }
+
+        /**
+         * Draws all pieces on the board
+         */
+        function drawPieces() {
+            for (let r = 0; r < DIMENSION; r++) {
+                for (let c = 0; c < DIMENSION; c++) {
+                    const piece = gameState.board[r][c];
+                    if (piece !== "--" && IMAGES[piece]) {
+                        // Centering the piece
+                        const padding = 2; // Small padding
+                        const x = c * SQUARE_SIZE + padding;
+                        const y = r * SQUARE_SIZE + padding;
+                        const size = SQUARE_SIZE - (padding * 2);
+                        ctx.drawImage(IMAGES[piece], x, y, size, size);
+                    }
+                }
+            }
+        }
+        
+        /**
+         * Draws dots on valid empty squares (ported)
+         */
+        function highlightEmptySquares(moves) {
+            const dotRadius = SQUARE_SIZE / 6;
+            ctx.fillStyle = "#bbbbbb";
+            for (const move of moves) {
+                if (move.pieceCaptured === "--") {
+                    const centerX = move.endCol * SQUARE_SIZE + SQUARE_SIZE / 2;
+                    const centerY = move.endRow * SQUARE_SIZE + SQUARE_SIZE / 2;
+                    ctx.beginPath();
+                    ctx.arc(centerX, centerY, dotRadius, 0, 2 * Math.PI);
+                    ctx.fill();
+                }
+            }
+        }
+
+        /**
+         * Draws rings on valid capture squares (ported)
+         */
+        function highlightCaptureSquares(moves) {
+            const ringThickness = 3;
+            ctx.strokeStyle = "#bbbbbb";
+            ctx.lineWidth = ringThickness;
+            for (const move of moves) {
+                if (move.pieceCaptured !== "--") {
+                    const x = move.endCol * SQUARE_SIZE + ringThickness;
+                    const y = move.endRow * SQUARE_SIZE + ringThickness;
+                    const size = SQUARE_SIZE - (ringThickness * 2);
+                    ctx.beginPath();
+                    ctx.arc(x + size/2, y + size/2, size/2, 0, 2 * Math.PI);
+                    ctx.stroke();
+                }
+            }
+        }
+        
+        /**
+         * Redraws the entire game state (board, highlights, pieces)
+         */
+        function drawGameState() {
+            drawBoard();
+            
+            // Highlight moves if a piece is selected
+            if (selectedSquare.row !== undefined) {
+                const movesForPiece = validMoves.filter(m => m.startRow === selectedSquare.row && m.startCol === selectedSquare.col);
+                highlightEmptySquares(movesForPiece);
+                // Draw pieces *after* empty dots
+                drawPieces();
+                // Draw capture rings *after* pieces
+                highlightCaptureSquares(movesForPiece);
+            } else {
+                drawPieces();
+            }
+        }
+
+        /**
+         * Updates the info panel (ported)
+         */
+        function updateInfoBox(pieceCode) {
+            const info = PIECE_INFO[pieceCode] || PIECE_INFO["default"];
+            infoPieceName.textContent = info.name;
+            infoPieceDesc.textContent = info.desc;
+        }
+
+        /**
+         * Main click handler for the canvas (ported)
+         */
+        function onSquareClick(event) {
+            if (gameState.checkmate) return; // Game is over
+
+            const rect = canvas.getBoundingClientRect();
+            // Scale click coordinates if canvas is resized
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            
+            const x = (event.clientX - rect.left) * scaleX;
+            const y = (event.clientY - rect.top) * scaleY;
+            
+            const col = Math.floor(x / SQUARE_SIZE);
+            const row = Math.floor(y / SQUARE_SIZE);
+            
+            const clickedSquare = { row, col };
+            const piece = gameState.board[row][col];
+            
+            if (selectedSquare.row !== undefined) {
+                // A piece is already selected
+                const selRow = selectedSquare.row;
+                const selCol = selectedSquare.col;
+                
+                // Deselect
+                selectedSquare = {}; 
+                updateInfoBox('default');
+                
+                if (clickedSquare.row === selRow && clickedSquare.col === selCol) {
+                    drawGameState(); // Just deselect
+                    return;
+                }
+
+                // Check if it's a valid move
+                const move = validMoves.find(m => 
+                    m.startRow === selRow && m.startCol === selCol &&
+                    m.endRow === row && m.endCol === col
+                );
+
+                if (move) {
+                    gameState.makeMove(move);
+                    moveLog = moveLog.slice(0, moveIndex + 1); // Truncate redo log
+                    moveLog.push(move);
+                    moveIndex++;
+                    
+                    if (!timerRunning) {
+                        timerRunning = true;
+                        lastTimeUpdate = Date.now();
+                    }
+                    
+                    // Get new moves and check for game over
+                    validMoves = gameState.getValidMoves(); 
+                    if (gameState.checkmate) {
+                        timerRunning = false;
+                        alert(gameState.whiteToMove ? "Checkmate! White wins." : "Checkmate! Black wins.");
+                    }
+
+                }
+                
+                drawGameState();
+
+            } else {
+                // No piece selected, try to select one
+                if (piece !== "--" && (piece[0] === 'w' ? gameState.whiteToMove : !gameState.whiteToMove)) {
+                    selectedSquare = clickedSquare;
+                    updateInfoBox(piece[1]);
+                    drawGameState(); // Redraw with highlights
+                }
+            }
+        }
+        
+        /**
+         * Starts a new game (ported)
+         */
+        function startNewGame() {
+            gameState = new GameState();
+            validMoves = gameState.getValidMoves();
+            selectedSquare = {};
+            moveLog = [];
+            moveIndex = -1;
+            playerTime = 600;
+            opponentTime = 600;
+            timerRunning = false;
+            lastTimeUpdate = Date.now();
+            updateInfoBox('default');
+            drawGameState();
+            updateTimerDisplay();
+        }
+
+        /**
+         * Undoes the last move (ported)
+         */
+        function undoMove() {
+            if (moveIndex >= 0) {
+                gameState.undoMove();
+                moveIndex--;
+                validMoves = gameState.getValidMoves();
+                selectedSquare = {};
+                updateInfoBox('default');
+                drawGameState();
+            }
+        }
+
+        /**
+         * Redoes the last undone move (ported)
+         */
+        function redoMove() {
+            if (moveIndex < moveLog.length - 1) {
+                moveIndex++;
+                gameState.makeMove(moveLog[moveIndex]);
+                validMoves = gameState.getValidMoves();
+                selectedSquare = {};
+                updateInfoBox('default');
+                drawGameState();
+            }
+        }
+        
+        /**
+         * Formats time from seconds to MM:SS
+         */
+        function formatTime(timeInSeconds) {
+            const minutes = Math.floor(timeInSeconds / 60);
+            const seconds = Math.floor(timeInSeconds % 60);
+            return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+        }
+        
+        /**
+         * Updates the timer labels on screen
+         */
+        function updateTimerDisplay() {
+            playerTimeLabel.textContent = `Player Time: ${formatTime(playerTime)}`;
+            opponentTimeLabel.textContent = `Opponent Time: ${formatTime(opponentTime)}`;
+        }
+
+        /**
+         * Main timer loop (ported)
+         */
+        function updateTimer() {
+            if (!timerRunning) return;
+            
+            const now = Date.now();
+            const elapsed = (now - lastTimeUpdate) / 1000; // in seconds
+            lastTimeUpdate = now;
+            
+            if (gameState.whiteToMove) {
+                playerTime -= elapsed;
+            } else {
+                opponentTime -= elapsed;
+            }
+            
+            if (playerTime <= 0 || opponentTime <= 0) {
+                playerTime = Math.max(0, playerTime);
+                opponentTime = Math.max(0, opponentTime);
+                timerRunning = false;
+                alert(playerTime <= 0 ? "Time's up! Black wins." : "Time's up! White wins.");
+            }
+            
+            updateTimerDisplay();
+        }
+
+        // --- 4. INITIALIZATION ---
+
+        /**
+         * Runs when the page content is loaded
+         */
+        document.addEventListener("DOMContentLoaded", () => {
+            canvas = document.getElementById("chessCanvas");
+            if (!canvas) {
+                console.error("Canvas element not found!");
+                return;
+            }
+            ctx = canvas.getContext("2d");
+            canvas.width = BOARD_WIDTH;
+            canvas.height = BOARD_HEIGHT;
+
+            // Get other DOM elements
+            playerTimeLabel = document.getElementById("player-time");
+            opponentTimeLabel = document.getElementById("opponent-time");
+            infoPieceName = document.getElementById("info-piece-name");
+            infoPieceDesc = document.getElementById("info-piece-desc");
+
+            // Add button listeners
+            document.getElementById("new-game-btn").onclick = startNewGame;
+            document.getElementById("undo-btn").onclick = undoMove;
+            document.getElementById("redo-btn").onclick = redoMove;
+            
+            // Add canvas click listener
+            canvas.onclick = onSquareClick;
+
+            // Load images and then start the game
+            loadImages()
+                .then(() => {
+                    console.log("Images loaded successfully.");
+                    startNewGame(); // Start the first game
+                    timerInterval = setInterval(updateTimer, 1000); // Start the timer loop
+                })
+                .catch(error => {
+                    console.error(error);
+                    alert("Fatal Error: Could not load piece images. Make sure the 'images' folder is in the same directory as this HTML file.");
+                });
+        });
+
+    </script>
+</body>
+</html>
